@@ -1,0 +1,362 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Description: >
+  Kuok Group Training Lab - Minimal CI/CD pipeline.
+  Two stages only: Source (GitHub main branch) and Deploy (CloudFormation + publish frontend).
+
+# ---------------------------------------------------------------------------
+# Parameters
+# ---------------------------------------------------------------------------
+Parameters:
+
+  ProjectName:
+    Type: String
+    Default: kuok-todo
+    Description: Prefix used to name the pipeline resources.
+    AllowedPattern: '[a-z0-9][a-z0-9-]{1,20}'
+
+  EnvironmentName:
+    Type: String
+    Default: dev
+    Description: The environment this pipeline deploys to. This lab only uses dev.
+    AllowedValues:
+      - dev
+
+  GitHubRepositoryId:
+    Type: String
+    Description: >
+      Your GitHub repository, in owner/repository format. There is deliberately
+      no default: pointing this at someone else's repository fails at the Source
+      stage in a way that looks like a connection problem.
+    AllowedPattern: '[A-Za-z0-9._-]+/[A-Za-z0-9._-]+'
+    ConstraintDescription: Must be owner/repository, for example my-org/three-tier-app.
+
+  GitHubBranch:
+    Type: String
+    Default: main
+    Description: >
+      The branch the pipeline watches. Only merges into this branch deploy.
+      Pushing to a feature branch does nothing - that is the point of the lab.
+
+  ApplicationStackName:
+    Type: String
+    Default: kuok-todo-dev-app
+    Description: Name of the application stack this pipeline creates and updates.
+
+Resources:
+
+  # =========================================================================
+  # SOURCE CONNECTION
+  # =========================================================================
+
+  # IMPORTANT: a connection created by CloudFormation starts in PENDING status.
+  # A human must open the AWS console once and authorise it against GitHub.
+  # This is the only manual step the lab cannot automate.
+  GitHubConnection:
+    Type: AWS::CodeConnections::Connection
+    Properties:
+      ConnectionName: !Sub '${ProjectName}-${EnvironmentName}-github'
+      ProviderType: GitHub
+
+  # =========================================================================
+  # ARTIFACT STORE
+  # =========================================================================
+
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      BucketName: !Sub '${ProjectName}-${EnvironmentName}-artifacts-${AWS::AccountId}'
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteOldPipelineArtifacts
+            Status: Enabled
+            ExpirationInDays: 7
+
+  # =========================================================================
+  # IAM ROLES - one per service, each scoped to what it actually does
+  # =========================================================================
+
+  # Role CloudFormation itself assumes when creating the application stack.
+  # Scoped to the services the application template uses, not AdministratorAccess.
+  CloudFormationDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${EnvironmentName}-cfn-deploy-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DeployApplicationResources
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: ApplicationServices
+                Effect: Allow
+                Action:
+                  - s3:*
+                  - dynamodb:*
+                  - lambda:*
+                  - apigateway:*
+                  - logs:*
+                Resource: '*'
+              - Sid: ManageApplicationRolesOnly
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:PassRole
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                Resource: !Sub 'arn:${AWS::Partition}:iam::${AWS::AccountId}:role/${ProjectName}-*'
+              - Sid: ReadPipelineArtifacts
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub '${ArtifactBucket.Arn}/*'
+
+  CodeBuildServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${EnvironmentName}-codebuild-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: PublishFrontend
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: WriteBuildLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/${ProjectName}-*'
+              - Sid: ReadSourceArtifact
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                Resource: !Sub '${ArtifactBucket.Arn}/*'
+              - Sid: PublishWebsiteFiles
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub 'arn:${AWS::Partition}:s3:::${ProjectName}-${EnvironmentName}-site-${AWS::AccountId}'
+                  - !Sub 'arn:${AWS::Partition}:s3:::${ProjectName}-${EnvironmentName}-site-${AWS::AccountId}/*'
+              - Sid: ReadApplicationStackOutputs
+                Effect: Allow
+                Action: cloudformation:DescribeStacks
+                Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ApplicationStackName}/*'
+
+  CodePipelineServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${ProjectName}-${EnvironmentName}-pipeline-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codepipeline.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RunPipeline
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: UseGitHubConnection
+                Effect: Allow
+                Action:
+                  - codestar-connections:UseConnection
+                  - codeconnections:UseConnection
+                Resource: !Ref GitHubConnection
+              - Sid: StoreArtifacts
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:PutObject
+                  - s3:GetBucketVersioning
+                Resource:
+                  - !GetAtt ArtifactBucket.Arn
+                  - !Sub '${ArtifactBucket.Arn}/*'
+              - Sid: RunCloudFormationDeployAction
+                Effect: Allow
+                Action:
+                  - cloudformation:CreateStack
+                  - cloudformation:UpdateStack
+                  - cloudformation:DescribeStacks
+                  - cloudformation:DescribeStackEvents
+                  - cloudformation:DescribeStackResources
+                  - cloudformation:GetTemplate
+                  - cloudformation:ValidateTemplate
+                Resource: !Sub 'arn:${AWS::Partition}:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${ApplicationStackName}/*'
+              - Sid: LetCloudFormationUseItsOwnRole
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !GetAtt CloudFormationDeployRole.Arn
+              - Sid: RunFrontendPublishBuild
+                Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                Resource: !GetAtt FrontendPublishProject.Arn
+
+  # =========================================================================
+  # BUILD PROJECT - publishes the website files after the stack is deployed
+  # =========================================================================
+
+  # Declared explicitly so that deleting this stack also removes the logs.
+  # If CodeBuild creates the group itself, it survives teardown as an orphan.
+  FrontendPublishLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      LogGroupName: !Sub '/aws/codebuild/${ProjectName}-${EnvironmentName}-publish-frontend'
+      RetentionInDays: 7
+
+  FrontendPublishProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-publish-frontend'
+      Description: Injects the API URL into app.js and copies the frontend to S3.
+      ServiceRole: !GetAtt CodeBuildServiceRole.Arn
+      Artifacts:
+        Type: CODEPIPELINE
+      Source:
+        Type: CODEPIPELINE
+        BuildSpec: buildspec.yml
+      Environment:
+        Type: LINUX_CONTAINER
+        ComputeType: BUILD_GENERAL1_SMALL
+        Image: aws/codebuild/amazonlinux2-x86_64-standard:5.0
+        EnvironmentVariables:
+          - Name: APP_STACK_NAME
+            Value: !Ref ApplicationStackName
+      LogsConfig:
+        CloudWatchLogs:
+          Status: ENABLED
+          GroupName: !Ref FrontendPublishLogGroup
+      TimeoutInMinutes: 10
+
+  # =========================================================================
+  # THE PIPELINE - Source then Deploy. Nothing else.
+  # =========================================================================
+
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      Name: !Sub '${ProjectName}-${EnvironmentName}-pipeline'
+      RoleArn: !GetAtt CodePipelineServiceRole.Arn
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Stages:
+
+        # -- Stage 1: retrieve the approved code ---------------------------
+        - Name: Source
+          Actions:
+            - Name: GitHubSource
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Provider: CodeStarSourceConnection
+                Version: '1'
+              Configuration:
+                ConnectionArn: !Ref GitHubConnection
+                FullRepositoryId: !Ref GitHubRepositoryId
+                BranchName: !Ref GitHubBranch
+                # DetectChanges installs a webhook on the repository, so a merge
+                # into main starts the pipeline automatically.
+                DetectChanges: true
+              OutputArtifacts:
+                - Name: SourceOutput
+              RunOrder: 1
+
+        # -- Stage 2: deploy to DEV ----------------------------------------
+        - Name: Deploy
+          Actions:
+            # First: create or update the application stack.
+            - Name: DeployApplicationStack
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Provider: CloudFormation
+                Version: '1'
+              Configuration:
+                ActionMode: CREATE_UPDATE
+                StackName: !Ref ApplicationStackName
+                TemplatePath: SourceOutput::infrastructure/application-infrastructure.yaml
+                Capabilities: CAPABILITY_NAMED_IAM
+                RoleArn: !GetAtt CloudFormationDeployRole.Arn
+                ParameterOverrides: !Sub '{"ProjectName":"${ProjectName}","EnvironmentName":"${EnvironmentName}"}'
+              InputArtifacts:
+                - Name: SourceOutput
+              RunOrder: 1
+
+            # Second: copy the website files into the bucket the stack created.
+            - Name: PublishFrontend
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Provider: CodeBuild
+                Version: '1'
+              Configuration:
+                ProjectName: !Ref FrontendPublishProject
+              InputArtifacts:
+                - Name: SourceOutput
+              RunOrder: 2
+
+Outputs:
+
+  ConnectionArn:
+    Description: >
+      Authorise this connection once in the console before the first run:
+      Developer Tools > Settings > Connections > Update pending connection.
+    Value: !Ref GitHubConnection
+
+  ConnectionStatus:
+    Description: Must read AVAILABLE before the pipeline can fetch your code.
+    Value: !GetAtt GitHubConnection.ConnectionStatus
+
+  PipelineName:
+    Description: The pipeline that deploys on every merge into main.
+    Value: !Ref Pipeline
+
+  PipelineConsoleURL:
+    Description: Open this to watch executions during the lab.
+    Value: !Sub 'https://${AWS::Region}.console.aws.amazon.com/codesuite/codepipeline/pipelines/${Pipeline}/view?region=${AWS::Region}'

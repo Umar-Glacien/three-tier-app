@@ -1,0 +1,213 @@
+/* Kuok Group Training Lab - three-tier todo application.
+   Plain CSS, no framework, no build step and no web-font downloads.
+   Colours are defined once here as custom properties and reused below. */
+
+:root {
+  /* surfaces */
+  --canvas: #0e1119;
+  --rail: #161a25;
+  --line: #262b3a;
+  --hairline: #1d2231;
+
+  /* text */
+  --ink: #eef1f8;
+  --muted: #b3bacd;
+  --faint: #8d96ae;
+  --ghost: #6b7488;
+
+  /* accent */
+  --primary: #8496ff;
+  --primary-hover: #9aa8ff;
+  --primary-top: #93a5ff;
+  --primary-soft: #1e2440;
+  --primary-line: #2e3763;
+
+  /* status */
+  --success: #6ee7a0;
+  --success-soft: #14261c;
+  --success-line: #1f4430;
+  --warn: #f0c070;
+  --warn-soft: #2a2114;
+  --warn-line: #4a3a1c;
+  --danger: #f2a097;
+  --danger-soft: #2e1815;
+  --danger-line: #5a2a24;
+
+  --shadow-lift: 0 4px 14px rgba(0, 0, 0, .5);
+  --radius: 12px;
+
+  --font-sans: "Inter", system-ui, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+  --font-serif: "Source Serif 4", Georgia, "Times New Roman", serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  padding: clamp(1.5rem, 5vw, 3.5rem) 1rem 3rem;
+  background-color: var(--canvas);
+  /* a single soft glow, echoing the product design language */
+  background-image: radial-gradient(60rem 30rem at 15% -10%, var(--primary-soft) 0%, transparent 60%);
+  background-repeat: no-repeat;
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 16px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app { width: 100%; max-width: 34rem; margin: 0 auto; }
+
+/* ---------- masthead ---------- */
+
+.masthead { margin-bottom: 2rem; }
+
+.eyebrow {
+  margin: 0 0 .6rem;
+  font-size: .69rem;
+  font-weight: 600;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--primary-top);
+}
+
+h1 {
+  margin: 0 0 .5rem;
+  font-family: var(--font-serif);
+  font-size: clamp(1.75rem, 5vw, 2.5rem);
+  font-weight: 600;
+  line-height: 1.12;
+  letter-spacing: -.015em;
+  color: #fff;
+}
+
+.subtitle { margin: 0; color: var(--muted); font-size: .95rem; }
+
+/* ---------- cards ---------- */
+
+.card {
+  background: var(--rail);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lift);
+  padding: 1.35rem;
+  margin-bottom: 1rem;
+}
+
+.card-title {
+  margin: 0 0 1rem;
+  font-size: .69rem;
+  font-weight: 600;
+  letter-spacing: .16em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* ---------- form ---------- */
+
+.field { margin-bottom: 1rem; }
+
+label {
+  display: block;
+  margin-bottom: .4rem;
+  font-size: .85rem;
+  font-weight: 500;
+  color: var(--muted);
+}
+
+input[type="text"],
+input[type="date"] {
+  width: 100%;
+  padding: .7rem .85rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--canvas);
+  color: var(--ink);
+  font-family: inherit;
+  font-size: .95rem;
+  color-scheme: dark;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+
+input::placeholder { color: var(--ghost); }
+
+input:hover { border-color: var(--primary-line); }
+
+input:focus-visible,
+button:focus-visible {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-soft);
+}
+
+button {
+  padding: .7rem 1.4rem;
+  border: 0;
+  border-radius: 8px;
+  background: var(--primary);
+  color: var(--canvas);
+  font-family: inherit;
+  font-size: .9rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background .15s ease, transform .05s ease;
+}
+
+button:hover:not(:disabled) { background: var(--primary-hover); }
+button:active:not(:disabled) { transform: translateY(1px); }
+button:disabled { opacity: .4; cursor: not-allowed; }
+
+/* ---------- task list ---------- */
+
+ul { list-style: none; margin: 0; padding: 0; }
+
+li {
+  display: flex;
+  align-items: baseline;
+  gap: .5rem;
+  padding: .75rem 0;
+  border-bottom: 1px solid var(--hairline);
+  font-size: .95rem;
+}
+
+li:first-child { padding-top: 0; }
+li:last-child { padding-bottom: 0; border-bottom: 0; }
+
+li.empty { display: block; color: var(--ghost); font-style: italic; border-bottom: 0; }
+
+.due-date { color: var(--faint); font-size: .85em; }
+
+/* ---------- messages ---------- */
+
+.message {
+  padding: .75rem .9rem;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  margin-bottom: 1rem;
+  font-size: .88rem;
+}
+
+.message.success { background: var(--success-soft); border-color: var(--success-line); color: var(--success); }
+.message.error { background: var(--danger-soft); border-color: var(--danger-line); color: var(--danger); }
+
+.banner {
+  padding: .85rem .9rem;
+  border-radius: 8px;
+  background: var(--warn-soft);
+  border: 1px solid var(--warn-line);
+  color: var(--warn);
+  font-size: .87rem;
+  margin-bottom: 1.25rem;
+}
+
+/* ---------- footer ---------- */
+
+.colophon {
+  margin-top: 1.75rem;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: .7rem;
+  letter-spacing: .04em;
+  color: var(--ghost);
+}

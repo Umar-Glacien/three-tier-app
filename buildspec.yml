@@ -1,0 +1,17 @@
+# Publishes the frontend after CloudFormation has deployed the application stack.
+# Everything this pipeline does is visible here - there are no hidden scripts.
+version: 0.2
+
+phases:
+  build:
+    commands:
+      # Read the two values we need from the application stack's outputs.
+      - BUCKET=$(aws cloudformation describe-stacks --stack-name "$APP_STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='FrontendBucketName'].OutputValue" --output text)
+      - API=$(aws cloudformation describe-stacks --stack-name "$APP_STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='ApiEndpoint'].OutputValue" --output text)
+      - echo "Publishing to bucket $BUCKET with API endpoint $API"
+
+      # Point the browser code at this environment's API.
+      - sed -i "s|__API_BASE_URL__|$API|g" frontend/app.js
+
+      # Copy the three frontend files into the website bucket.
+      - aws s3 sync frontend/ "s3://$BUCKET/" --delete

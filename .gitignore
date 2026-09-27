@@ -1,0 +1,5 @@
+.DS_Store
+*.swp
+packaged.yaml
+.venv/
+__pycache__/
